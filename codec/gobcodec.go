@@ -28,8 +28,8 @@ func (g GobCodec) ReadBody(body interface{}) error {
 
 func (g GobCodec) Write(header *Header, body interface{}) (err error) {
 	defer func() {
-		if err == nil {
-			g.buf.Flush()
+		g.buf.Flush()
+		if err != nil {
 			g.Close()
 		}
 	}()
