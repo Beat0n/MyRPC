@@ -3,18 +3,20 @@ package MyRPC
 import (
 	"MyRPC/codec"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"reflect"
+	"strings"
 	"sync"
 )
 
 const MagicNumber = 0x000001
 
 type Option struct {
-	MagicNumber int // MagicNumber marks this is a rpc request
-	CodecType   codec.Type
+	MagicNumber int        `json:"magicNumber"` // MagicNumber marks this is a rpc request
+	CodecType   codec.Type `json:"codecType"`
 }
 
 var DefaultOption = &Option{
@@ -100,6 +102,7 @@ func (server *Server) readRequest(cc codec.Codec) (*request, error) {
 		return nil, err
 	}
 	req := &request{header: header}
+	req.svc, req.methodtype = server.findService(header.ServiceMethod)
 	req.argv = reflect.New(reflect.TypeOf(""))
 	if err = cc.ReadBody(req.argv.Interface()); err != nil {
 		log.Println("rpc server: read argv err:", err)
@@ -125,6 +128,24 @@ func (server *Server) sendResponse(cc codec.Codec, header *codec.Header, body in
 	return nil
 }
 
+func (server *Server) findService(serviceMethod string) (*service, *MethodType, error) {
+	dot := strings.LastIndex(serviceMethod, ".")
+	if dot <= 0 {
+		err := errors.New("rpc server receive malformed service method")
+		return nil, nil, err
+	}
+	serviceName := serviceMethod[:dot]
+	methodName := serviceMethod[dot+1:]
+
+	svci, ok := server.serviceMap.Load(serviceName)
+	if !ok {
+		err := errors.New("rpc server cannot find service: " + serviceName)
+		return nil, nil, err
+	}
+	svc := svci.(*service)
+
+}
+
 var DefaultServer = NewServer()
 
 type request struct {
@@ -135,8 +156,11 @@ type request struct {
 }
 
 type MethodType struct {
-	method    *reflect.Method
-	ArgType   reflect.Type
+	//方法
+	method *reflect.Method
+	//方法调用需要的参数类型
+	ArgType reflect.Type
+	//方法调用的结果参数类型
 	ReplyType reflect.Type
 }
 
