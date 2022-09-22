@@ -3,6 +3,7 @@ package MyRPC
 import (
 	"MyRPC/codec"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"reflect"
@@ -44,6 +45,8 @@ func Accept(lis net.Listener) {
 	DefaultServer.Accept(lis)
 }
 
+var invalidRequest = struct{}{}
+
 func (server *Server) ServeConn(conn net.Conn) {
 	var opt Option
 	if err := json.NewDecoder(conn).Decode(&opt); err != nil {
@@ -69,6 +72,8 @@ func (server *Server) ServeConn(conn net.Conn) {
 	//2.read request
 
 	//3/handle request
+
+	//4.send response
 	for {
 		req, err := server.readRequest(cc)
 		if err != nil {
@@ -76,14 +81,48 @@ func (server *Server) ServeConn(conn net.Conn) {
 				break
 			}
 			req.header.Error = err.Error()
-			server.sendResponse(req)
+			server.sendResponse(cc, req.header, invalidRequest, sending)
+			continue
 		}
+		wg.Add(1)
+		go server.handleRequest(cc, req, wg, sending)
 	}
 
+	wg.Wait()
+	defer cc.Close()
 }
 
-func (server *Server) readRequest(cc codec.Codec) (req *request, err error) {
+func (server *Server) readRequest(cc codec.Codec) (*request, error) {
+	header := new(codec.Header)
+	err := cc.ReadHeader(header)
+	if err != nil {
+		log.Printf("rpc server read request header error: %s\n", err)
+		return nil, err
+	}
+	req := &request{header: header}
+	req.argv = reflect.New(reflect.TypeOf(""))
+	if err = cc.ReadBody(req.argv.Interface()); err != nil {
+		log.Println("rpc server: read argv err:", err)
+	}
+	return req, nil
+}
 
+func (server *Server) handleRequest(cc codec.Codec, req *request, wg *sync.WaitGroup, sending *sync.Mutex) {
+	defer wg.Done()
+	log.Println("Server:", req.header, req.argv.Elem())
+	req.replyv = reflect.ValueOf(fmt.Sprintf("geerpc resp %d", req.header.Seq))
+	server.sendResponse(cc, req.header, req.replyv.Interface(), sending)
+}
+
+func (server *Server) sendResponse(cc codec.Codec, header *codec.Header, body interface{}, sending *sync.Mutex) error {
+	sending.Lock()
+	defer sending.Unlock()
+
+	if err := cc.Write(header, body); err != nil {
+		log.Println("rpc server send response error: %d", err)
+		return err
+	}
+	return nil
 }
 
 var DefaultServer = NewServer()
