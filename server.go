@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
 	"log"
 	"net"
 	"reflect"
@@ -102,7 +103,11 @@ func (server *Server) readRequest(cc codec.Codec) (*request, error) {
 		return nil, err
 	}
 	req := &request{header: header}
-	req.svc, req.methodtype = server.findService(header.ServiceMethod)
+	req.svc, req.methods, err = server.findService(header.ServiceMethod)
+	if err != nil {
+		log.Println("rpc serveer find service error: " + err.Error())
+		return req, err
+	}
 	req.argv = reflect.New(reflect.TypeOf(""))
 	if err = cc.ReadBody(req.argv.Interface()); err != nil {
 		log.Println("rpc server: read argv err:", err)
@@ -122,7 +127,7 @@ func (server *Server) sendResponse(cc codec.Codec, header *codec.Header, body in
 	defer sending.Unlock()
 
 	if err := cc.Write(header, body); err != nil {
-		log.Println("rpc server send response error: %d", err)
+		log.Printf("rpc server send response error: %s", err)
 		return err
 	}
 	return nil
@@ -144,6 +149,12 @@ func (server *Server) findService(serviceMethod string) (*service, *MethodType, 
 	}
 	svc := svci.(*service)
 
+	methodType := svc.methods[methodName]
+	if methodType == nil {
+		err := errors.New(fmt.Sprintf("rpc server cannot find the method: %s of service: %s\n", methodName, serviceName))
+		return svc, nil, err
+	}
+	return svc, methodType, nil
 }
 
 var DefaultServer = NewServer()
@@ -152,16 +163,39 @@ type request struct {
 	header       *codec.Header
 	argv, replyv reflect.Value
 	svc          *service
-	methodtype   *MethodType
+	methods      *MethodType
 }
 
 type MethodType struct {
 	//方法
-	method *reflect.Method
+	method reflect.Method
 	//方法调用需要的参数类型
 	ArgType reflect.Type
 	//方法调用的结果参数类型
 	ReplyType reflect.Type
+}
+
+func (mType *MethodType) newArgv() reflect.Value {
+	var argv reflect.Value
+	//// arg may be a pointer type, or a value type
+	if mType.ArgType.Kind() == reflect.Pointer {
+		argv = reflect.New(mType.ArgType.Elem())
+	} else {
+		argv = reflect.New(mType.ArgType).Elem()
+	}
+	return argv
+}
+
+func (mType *MethodType) newReplyv() reflect.Value {
+	var replyv reflect.Value
+	//reply must be a pointer type
+	switch mType.ReplyType.Elem().Kind() {
+	case reflect.Map:
+		replyv.Elem().Set(reflect.MakeMap(mType.ReplyType.Elem()))
+	case reflect.Slice:
+		replyv.Elem().Set(reflect.MakeSlice(mType.ReplyType.Elem(), 0, 0))
+	}
+	return replyv
 }
 
 type service struct {
@@ -172,5 +206,55 @@ type service struct {
 	//结构体实例
 	rcvr reflect.Value
 	//结构体方法
-	method map[string]*MethodType
+	methods map[string]*MethodType
+}
+
+func newService(rcvr interface{}) *service {
+	s := new(service)
+	s.rcvr = reflect.ValueOf(rcvr)
+	//Indirect:   if rcvr.Kind() != Pointer { return rcvr } else return rcvr.Elem()
+	s.name = reflect.Indirect(s.rcvr).Type().Name()
+	s.typ = reflect.TypeOf(rcvr)
+	if !ast.IsExported(s.name) {
+		log.Println("rpc server: invalid service")
+		return nil
+	}
+	s.registerMethods()
+	return s
+}
+
+func (s *service) registerMethods() {
+	s.methods = make(map[string]*MethodType)
+	for i := 0; i < s.typ.NumMethod(); i++ {
+		method := s.typ.Method(i)
+		mType := method.Type
+		//符合条件的方法：3个入参（self， arg， reply），1个出参（error），arg和reply可用
+		if mType.NumIn() != 3 && mType.NumOut() != 1 && mType.Out(0) != reflect.TypeOf(error(nil)) {
+			continue
+		}
+		if !isExportedOrBuiltinType(mType.In(1)) || !isExportedOrBuiltinType(mType.In(2)) {
+			continue
+		}
+		argType, replyType := mType.In(1), mType.In(2)
+		s.methods[method.Name] = &MethodType{
+			method:    method,
+			ArgType:   argType,
+			ReplyType: replyType,
+		}
+		log.Printf("rpc server: register %s.%s\n", s.name, method.Name)
+	}
+}
+
+func isExportedOrBuiltinType(t reflect.Type) bool {
+	return ast.IsExported(t.Name()) || t.PkgPath() == ""
+}
+
+func (s *service) call(m *MethodType, argv, replyv reflect.Value) error {
+	f := m.method.Func
+	returnValues := f.Call([]reflect.Value{s.rcvr, argv, replyv})
+	if err := returnValues[0].Interface(); err != nil {
+		log.Printf("rpc server: call error: %s\n", err)
+		return err.(error)
+	}
+	return nil
 }
