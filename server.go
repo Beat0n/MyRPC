@@ -134,7 +134,7 @@ func (server *Server) sendResponse(cc codec.Codec, header *codec.Header, body in
 	return nil
 }
 
-func (server *Server) findService(serviceMethod string) (*service, *methodType, error) {
+func (server *Server) findService(serviceMethod string) (*service, *MethodType, error) {
 	dot := strings.LastIndex(serviceMethod, ".")
 	if dot <= 0 {
 		err := errors.New("rpc server receive malformed service method")
@@ -164,10 +164,10 @@ type request struct {
 	header       *codec.Header
 	argv, replyv reflect.Value
 	svc          *service
-	methods      *methodType
+	methods      *MethodType
 }
 
-type methodType struct {
+type MethodType struct {
 	//方法
 	method reflect.Method
 	//方法调用需要的参数类型
@@ -177,11 +177,11 @@ type methodType struct {
 	numCalls  uint64
 }
 
-func (m *methodType) NumCalls() uint64 {
+func (m *MethodType) NumCalls() uint64 {
 	return atomic.LoadUint64(&m.numCalls)
 }
 
-func (mType *methodType) newArgv() reflect.Value {
+func (mType *MethodType) newArgv() reflect.Value {
 	var argv reflect.Value
 	//// arg may be a pointer type, or a value type
 	if mType.ArgType.Kind() == reflect.Ptr {
@@ -192,7 +192,7 @@ func (mType *methodType) newArgv() reflect.Value {
 	return argv
 }
 
-func (mType *methodType) newReplyv() reflect.Value {
+func (mType *MethodType) newReplyv() reflect.Value {
 	var replyv reflect.Value
 	//reply must be a pointer type
 	switch mType.ReplyType.Elem().Kind() {
@@ -212,7 +212,7 @@ type service struct {
 	//结构体实例
 	rcvr reflect.Value
 	//结构体方法
-	methods map[string]*methodType
+	methods map[string]*MethodType
 }
 
 func newService(rcvr interface{}) *service {
@@ -229,19 +229,19 @@ func newService(rcvr interface{}) *service {
 }
 
 func (s *service) registerMethods() {
-	s.methods = make(map[string]*methodType)
+	s.methods = make(map[string]*MethodType)
 	for i := 0; i < s.typ.NumMethod(); i++ {
 		method := s.typ.Method(i)
 		mType := method.Type
 		//符合条件的方法：3个入参（self， arg， reply），1个出参（error），arg和reply可用
-		if mType.NumIn() != 3 || mType.NumOut() != 1 || mType.Out(0) != reflect.TypeOf(error(nil)) {
+		if mType.NumIn() != 3 || mType.NumOut() != 1 || mType.Out(0) != reflect.TypeOf((*error)(nil)).Elem() {
 			continue
 		}
 		if !isExportedOrBuiltinType(mType.In(1)) || !isExportedOrBuiltinType(mType.In(2)) {
 			continue
 		}
 		argType, replyType := mType.In(1), mType.In(2)
-		s.methods[method.Name] = &methodType{
+		s.methods[method.Name] = &MethodType{
 			method:    method,
 			ArgType:   argType,
 			ReplyType: replyType,
@@ -254,7 +254,7 @@ func isExportedOrBuiltinType(t reflect.Type) bool {
 	return ast.IsExported(t.Name()) || t.PkgPath() == ""
 }
 
-func (s *service) call(m *methodType, argv, replyv reflect.Value) error {
+func (s *service) call(m *MethodType, argv, replyv reflect.Value) error {
 	atomic.AddUint64(&m.numCalls, 1)
 
 	f := m.method.Func

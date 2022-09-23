@@ -2,6 +2,7 @@ package MyRPC
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 )
 
@@ -41,6 +42,7 @@ func TestMethod_call(t *testing.T) {
 	s := newService(&foo)
 	method := s.methods["Sum"]
 	argv, replyv := method.newArgv(), method.newReplyv()
+	argv.Set(reflect.ValueOf(Args{Num1: 1, Num2: 3}))
 	err := s.call(method, argv, replyv)
 	_assert(err == nil, fmt.Sprintf("call 'Sum' failed\n"))
 }
