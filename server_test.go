@@ -8,15 +8,24 @@ import (
 
 type Foo int
 
-type Args struct{ Num1, Num2 int }
+type Sumable interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~float32 | ~float64 | ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~string
+}
+type Args[T Sumable] struct {
+	Num1, Num2 T
+}
 
-func (f Foo) Sum(args Args, reply *int) error {
+//定义Sum参数类型
+type myType string
+
+func (f Foo) Sum(args Args[myType], reply *myType) error {
 	*reply = args.Num1 + args.Num2
 	return nil
 }
 
 // it's not a exported Method
-func (f Foo) sum(args Args, reply *int) error {
+func (f Foo) sum(args Args[myType], reply *myType) error {
+
 	*reply = args.Num1 + args.Num2
 	return nil
 }
@@ -42,7 +51,21 @@ func TestMethod_call(t *testing.T) {
 	s := newService(&foo)
 	method := s.methods["Sum"]
 	argv, replyv := method.newArgv(), method.newReplyv()
-	argv.Set(reflect.ValueOf(Args{Num1: 1, Num2: 3}))
+	argv.Set(reflect.ValueOf(Args[myType]{Num1: "hu", Num2: "jizhe"}))
 	err := s.call(method, argv, replyv)
+	_assert(err == nil, fmt.Sprintf("call 'Sum' failed\n"))
+}
+
+func TestFindService(t *testing.T) {
+	var foo Foo
+	Register(&foo)
+	svci, ok := DefaultServer.serviceMap.Load("Foo")
+	_assert(ok, "no service")
+	svc := svci.(*service)
+	method := svc.methods["Sum"]
+	argv, replyv := method.newArgv(), method.newReplyv()
+	argv.Set(reflect.ValueOf(Args[myType]{Num1: "hu", Num2: "jizhe"}))
+	err := svc.call(method, argv, replyv)
+	fmt.Println(replyv.Elem())
 	_assert(err == nil, fmt.Sprintf("call 'Sum' failed\n"))
 }

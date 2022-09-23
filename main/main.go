@@ -48,10 +48,10 @@ func main() {
 		log.Printf("rpc client dial error: %s\n", err)
 		return
 	}
-	time.Sleep(2e9)
 	//传入Option
 	json.NewEncoder(conn).Encode(MyRPC.DefaultOption)
 	cc := codec.NewGobCodec(conn)
+	time.Sleep(2e9)
 	for i := 0; i < 5; i++ {
 		h := &codec.Header{
 			Seq:           uint64(i),
