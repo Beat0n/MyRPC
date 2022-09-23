@@ -27,7 +27,7 @@ var DefaultOption = &Option{
 }
 
 type Server struct {
-	serviceMap sync.Map
+	serviceMap sync.Map //map[servicename]*service
 }
 
 func NewServer() *Server {
@@ -45,6 +45,17 @@ func (server *Server) Accept(lis net.Listener) {
 	}
 }
 
+func (server *Server) Register(rcvr interface{}) error {
+	s := newService(rcvr)
+	if _, loaded := server.serviceMap.LoadOrStore(s.name, s); loaded {
+		return errors.New(fmt.Sprintf("rpc server: service %s already exists", s.name))
+	}
+	return nil
+}
+
+func Register(rcvr interface{}) error {
+	return DefaultServer.Register(rcvr)
+}
 func Accept(lis net.Listener) {
 	DefaultServer.Accept(lis)
 }
@@ -193,8 +204,8 @@ func (mType *MethodType) newArgv() reflect.Value {
 }
 
 func (mType *MethodType) newReplyv() reflect.Value {
-	var replyv reflect.Value
 	//reply must be a pointer type
+	replyv := reflect.New(mType.ReplyType.Elem())
 	switch mType.ReplyType.Elem().Kind() {
 	case reflect.Map:
 		replyv.Elem().Set(reflect.MakeMap(mType.ReplyType.Elem()))

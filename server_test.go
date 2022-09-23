@@ -45,5 +45,4 @@ func TestMethod_call(t *testing.T) {
 	argv.Set(reflect.ValueOf(Args{Num1: 1, Num2: 3}))
 	err := s.call(method, argv, replyv)
 	_assert(err == nil, fmt.Sprintf("call 'Sum' failed\n"))
-
 }

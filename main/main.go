@@ -4,7 +4,6 @@ import (
 	"MyRPC"
 	"MyRPC/codec"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net"
 	"time"
@@ -12,7 +11,25 @@ import (
 
 const Addr = "127.0.0.1:8080"
 
+type Foo struct{}
+
+type Args struct {
+	Arg1, Arg2 int
+}
+
+type Body struct {
+	Args
+	Reply *int
+}
+
+func (f *Foo) Sum(args Args, reply *int) error {
+	*reply = args.Arg1 + args.Arg2
+	return nil
+}
+
 func startServer() {
+	var foo Foo
+
 	l, err := net.Listen("tcp", Addr)
 	if err != nil {
 		log.Printf("rpc server listen error: %s\n", err)
@@ -20,6 +37,7 @@ func startServer() {
 	}
 	log.Println("start rpc server...")
 	MyRPC.Accept(l)
+	MyRPC.Register(&foo)
 }
 func main() {
 	go startServer()
@@ -39,11 +57,20 @@ func main() {
 			Seq:           uint64(i),
 			ServiceMethod: "Foo.Sum",
 		}
-		cc.Write(h, fmt.Sprintf("geerpc req %d", h.Seq))
+		var reply float64
+		args := Args{
+			i,
+			i * i,
+		}
+		body := &Body{
+			Args:  args,
+			Reply: new(int),
+		}
+		cc.Write(h, body)
 		cc.ReadHeader(h)
 		log.Printf("header: %v\n", h)
-		var reply string
+
 		cc.ReadBody(&reply)
-		log.Printf("reply: %s\n", reply)
+		log.Printf("reply: %.2f\n", reply)
 	}
 }
