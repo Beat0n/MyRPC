@@ -32,6 +32,7 @@ type Server struct {
 
 func NewServer() *Server {
 	return &Server{}
+
 }
 
 func (server *Server) Accept(lis net.Listener) {

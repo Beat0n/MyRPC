@@ -52,7 +52,7 @@ func main() {
 	json.NewEncoder(conn).Encode(MyRPC.DefaultOption)
 	cc := codec.NewGobCodec(conn)
 	time.Sleep(2e9)
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 50; i++ {
 		h := &codec.Header{
 			Seq:           uint64(i),
 			ServiceMethod: "Foo.Sum",
