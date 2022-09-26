@@ -49,3 +49,23 @@ func (c *Client) Close() error {
 	c.closing = true
 	return c.cc.Close()
 }
+
+func (c *Client) registerCall(call *Call) (uint64, error) {
+
+}
+
+func (c *Client) removeCall(seq uint64) *Call {
+
+}
+
+func (c *Client) terminateCalls(err error) {
+	c.sending.Lock()
+	defer c.sending.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.shutdown = true
+	for _, call := range c.unHandledCalls {
+		call.Error = err
+		call.done()
+	}
+}
