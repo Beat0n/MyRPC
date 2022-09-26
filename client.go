@@ -2,7 +2,11 @@ package MyRPC
 
 import (
 	"MyRPC/codec"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
+	"net"
 	"sync"
 )
 
@@ -31,6 +35,34 @@ type Client struct {
 	shutdown       bool //server tells client to shutdown
 }
 
+func NewClient(conn net.Conn, opt *Option) (*Client, error) {
+	f := codec.NewCodecFuncMap[opt.CodecType]
+	if f == nil {
+		err := fmt.Errorf("invalid codec type %s", opt.CodecType)
+		log.Println("rpc client: codec error:", err)
+		return nil, err
+	}
+
+	if err := json.NewEncoder(conn).Encode(opt); err != nil {
+		log.Println("rpc client: options error: ", err)
+		conn.Close()
+		return nil, err
+	}
+
+	return newClientCodec(f(conn), opt), nil
+}
+
+func newClientCodec(cc codec.Codec, opt *Option) *Client {
+	client := &Client{
+		cc:             cc,
+		seq:            1,
+		opt:            opt,
+		unHandledCalls: make(map[uint64]*Call),
+	}
+	go client.receive()
+	return client
+}
+
 var Errshutdown = errors.New("connection already shutdown")
 
 func (c *Client) IsAvailable() bool {
@@ -51,11 +83,25 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) registerCall(call *Call) (uint64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
+	if c.shutdown || c.closing {
+		return 0, Errshutdown
+	}
+
+	call.Seq = c.seq
+	c.seq++
+	c.unHandledCalls[call.Seq] = call
+	return call.Seq, nil
 }
 
 func (c *Client) removeCall(seq uint64) *Call {
-
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	call := c.unHandledCalls[seq]
+	delete(c.unHandledCalls, seq)
+	return call
 }
 
 func (c *Client) terminateCalls(err error) {
@@ -68,4 +114,8 @@ func (c *Client) terminateCalls(err error) {
 		call.Error = err
 		call.done()
 	}
+}
+
+func (c *Client) receive() {
+
 }
