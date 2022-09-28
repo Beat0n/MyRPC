@@ -11,12 +11,12 @@ import (
 )
 
 type Call struct {
-	Seq          uint64
-	ServicMethod string
-	Args         any
-	Reply        any
-	Error        error
-	Done         chan *Call
+	Seq           uint64
+	ServiceMethod string
+	Args          any
+	Reply         any
+	Error         error
+	Done          chan *Call
 }
 
 func (call *Call) done() {
@@ -27,7 +27,7 @@ type Client struct {
 	cc             codec.Codec
 	opt            *Option
 	sending        sync.Mutex //protect following
-	header         *codec.Header
+	header         codec.Header
 	mu             sync.Mutex //protect following
 	seq            uint64
 	unHandledCalls map[uint64]*Call
@@ -116,6 +116,95 @@ func (c *Client) terminateCalls(err error) {
 	}
 }
 
-func (c *Client) receive() {
+func (client *Client) receive() {
+	var err error
+	for err == nil {
+		var h codec.Header
+		if err = client.cc.ReadHeader(&h); err != nil {
+			break
+		}
+		call := client.removeCall(h.Seq)
+		switch {
+		case call == nil:
+			err = client.cc.ReadBody(nil)
+		case h.Error != "":
+			call.Error = fmt.Errorf(h.Error)
+			err = client.cc.ReadBody(nil)
+			call.done()
+		default:
+			err = client.cc.ReadBody(call.Reply)
+			if err != nil {
+				call.Error = errors.New("reading body" + err.Error())
+			}
+			call.done()
+		}
+	}
+	client.terminateCalls(err)
+}
 
+func Dial(network, address string) (c *Client, err error) {
+	conn, err := net.Dial(network, address)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			conn.Close()
+		}
+	}()
+	return NewClient(conn, DefaultOption)
+}
+
+func (client *Client) send(call *Call) {
+	client.sending.Lock()
+	defer client.sending.Unlock()
+
+	// register this call.
+	seq, err := client.registerCall(call)
+	if err != nil {
+		call.Error = err
+		call.done()
+		return
+	}
+
+	// prepare request header
+	client.header.ServiceMethod = call.ServiceMethod
+	client.header.Seq = seq
+	client.header.Error = ""
+
+	// encode and send the request
+	if err := client.cc.Write(&client.header, call.Args); err != nil {
+		call := client.removeCall(seq)
+		// call may be nil, it usually means that Write partially failed,
+		// client has received the response and handled
+		if call != nil {
+			call.Error = err
+			call.done()
+		}
+	}
+}
+
+// Go invokes the function asynchronously.
+// It returns the Call structure representing the invocation.
+func (client *Client) Go(serviceMethod string, args, reply interface{}, done chan *Call) *Call {
+	if done == nil {
+		done = make(chan *Call, 10)
+	} else if cap(done) == 0 {
+		log.Panic("rpc client: done channel is unbuffered")
+	}
+	call := &Call{
+		ServiceMethod: serviceMethod,
+		Args:          args,
+		Reply:         reply,
+		Done:          done,
+	}
+	client.send(call)
+	return call
+}
+
+// Call invokes the named function, waits for it to complete,
+// and returns its error status.
+func (client *Client) Call(serviceMethod string, args, reply interface{}) error {
+	call := <-client.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
+	return call.Error
 }

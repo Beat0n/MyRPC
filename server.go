@@ -121,17 +121,29 @@ func (server *Server) readRequest(cc codec.Codec) (*request, error) {
 		log.Println("rpc serveer find service error: " + err.Error())
 		return req, err
 	}
-	req.argv = reflect.New(reflect.TypeOf(""))
-	if err = cc.ReadBody(req.argv.Interface()); err != nil {
-		log.Println("rpc server: read argv err:", err)
+	req.argv = req.methods.newArgv()
+	req.replyv = req.methods.newReplyv()
+
+	// make sure that argvi is a pointer, ReadBody need a pointer as parameter
+	argvi := req.argv.Interface()
+	if req.argv.Type().Kind() != reflect.Ptr {
+		argvi = req.argv.Addr().Interface()
+	}
+	if err = cc.ReadBody(argvi); err != nil {
+		log.Println("rpc server: read body err:", err)
+		return req, err
 	}
 	return req, nil
 }
 
 func (server *Server) handleRequest(cc codec.Codec, req *request, wg *sync.WaitGroup, sending *sync.Mutex) {
 	defer wg.Done()
-	log.Println("Server:", req.header, req.argv.Elem())
-	req.replyv = reflect.ValueOf(fmt.Sprintf("geerpc resp %d", req.header.Seq))
+	err := req.svc.call(req.methods, req.argv, req.replyv)
+	if err != nil {
+		req.header.Error = err.Error()
+		server.sendResponse(cc, req.header, invalidRequest, sending)
+		return
+	}
 	server.sendResponse(cc, req.header, req.replyv.Interface(), sending)
 }
 

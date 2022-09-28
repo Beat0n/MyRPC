@@ -2,75 +2,74 @@ package main
 
 import (
 	"MyRPC"
-	"MyRPC/codec"
-	"encoding/json"
 	"log"
 	"net"
+	"strings"
+	"sync"
 	"time"
 )
 
-const Addr = "127.0.0.1:8080"
+type Foo int
 
-type Foo struct{}
+type Args struct{ Num1, Num2 int }
 
-type Args struct {
-	Arg1, Arg2 int
-}
-
-type Body struct {
-	Args
-	Reply *int
-}
-
-func (f *Foo) Sum(args Args, reply *int) error {
-	*reply = args.Arg1 + args.Arg2
+func (f Foo) Sum(args Args, reply *int) error {
+	*reply = args.Num1 + args.Num2
 	return nil
 }
 
-func startServer() {
-	var foo Foo
-
-	l, err := net.Listen("tcp", Addr)
-	if err != nil {
-		log.Printf("rpc server listen error: %s\n", err)
-		return
-	}
-	log.Println("start rpc server...")
-	MyRPC.Accept(l)
-	MyRPC.Register(&foo)
+func (f Foo) ToUpper(s string, reply *string) error {
+	*reply = strings.ToUpper(s)
+	return nil
 }
-func main() {
-	go startServer()
 
-	conn, err := net.Dial("tcp", Addr)
-	defer conn.Close()
+func startServer(addr chan string) {
+	var foo Foo
+	if err := MyRPC.Register(&foo); err != nil {
+		log.Fatal("register error:", err)
+	}
+	// pick a free port
+	l, err := net.Listen("tcp", ":0")
 	if err != nil {
-		log.Printf("rpc client dial error: %s\n", err)
-		return
+		log.Fatal("network error:", err)
 	}
-	//传入Option
-	json.NewEncoder(conn).Encode(MyRPC.DefaultOption)
-	cc := codec.NewGobCodec(conn)
-	time.Sleep(2e9)
-	for i := 0; i < 50; i++ {
-		h := &codec.Header{
-			Seq:           uint64(i),
-			ServiceMethod: "Foo.Sum",
-		}
-		var reply float64
-		args := Args{
-			i,
-			i * i,
-		}
-		body := &Body{
-			Args:  args,
-			Reply: new(int),
-		}
-		cc.Write(h, body)
-		cc.ReadHeader(h)
-		log.Printf("header: %v\n", h)
+	log.Println("start rpc server on", l.Addr())
+	addr <- l.Addr().String()
+	MyRPC.Accept(l)
+}
 
-		cc.ReadBody(&reply)
-		log.Printf("reply: %.2f\n", reply)
+func main() {
+	log.SetFlags(0)
+	addr := make(chan string)
+	go startServer(addr)
+
+	for n := 0; n < 5; n++ {
+		go func() {
+			client, _ := MyRPC.Dial("tcp", <-addr)
+			defer client.Close()
+			time.Sleep(1e9)
+
+			// send request & receive response
+			var wg sync.WaitGroup
+			for i := 0; i < 5; i++ {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					args := &Args{Num1: i, Num2: i * i}
+					var reply int
+					if err := client.Call("Foo.Sum", args, &reply); err != nil {
+						log.Fatal("call Foo.Sum error:", err)
+					}
+					log.Printf("%d + %d = %d", args.Num1, args.Num2, reply)
+				}(i)
+			}
+			var stringReply string
+			if err := client.Call("Foo.ToUpper", "hjz", &stringReply); err != nil {
+				log.Fatal("call Foo.ToUpper error:", err)
+			}
+			log.Println(stringReply)
+			wg.Wait()
+		}()
 	}
+	time.Sleep(10e9)
 }
